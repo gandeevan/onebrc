@@ -1,0 +1,13 @@
+Dushanbe;22.3
+Dushanbe;22.8
+Karachi;25.8
+Honolulu;15.6
+Assab;13.2
+Cracow;10.3
+Bulawayo;8.6
+Hanoi;19.4
+Jakarta;34.2
+Omaha;-11.7
+Fairbanks;-9.4
+Dushanbe;22.9
+Cracow;10.3
