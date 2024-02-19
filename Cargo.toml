@@ -18,7 +18,5 @@ overflow-checks = false
 
 [profile.release]
 codegen-units = 1
-lto = "fat"
-#incremental = true
-#debug = true
-#debuginfo-level = 1
+lto = false
+debug = 1

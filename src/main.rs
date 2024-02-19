@@ -11,13 +11,15 @@ mod attempt6;
 
 use log::{debug, info};
 
+use crate::utils::THREAD_COUNT;
+
 
 
 fn main() {
     env_logger::init();
 
     let start_time = Instant::now();
-    attempt6::run();
+    attempt6::run("data/measurements.txt", THREAD_COUNT);
     let end_time = Instant::now();
     info!("Runtime: {} milliseconds", (end_time-start_time).as_millis());
 }

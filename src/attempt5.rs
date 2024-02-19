@@ -1,7 +1,7 @@
 use core::num;
-use std::{collections::BTreeMap, fs::{self, File}, io::{Read, Seek, SeekFrom}, ptr, thread::{self}, time::Instant};
+use std::{collections::BTreeMap, env, fs::{self, File}, io::{Read, Seek, SeekFrom}, ptr, thread::{self, JoinHandle}, time::Instant};
 
-use crate::utils::{print_result_btreemap, print_result_hashmap, KeyedStat, Stat, MAX_LINE_SIZE, THREAD_COUNT};
+use crate::{attempt1, utils::{print_result_btreemap_kstat, KeyedStat, MAX_LINE_SIZE, THREAD_COUNT}};
 use log::{debug, info};
 use std::str;
 
@@ -14,7 +14,6 @@ use std::str;
 
 struct LPTable {
     num_slots: usize,
-    min_slot_size: usize,
     table: Vec<Vec<KeyedStat>>,
     size: u32,
     occupied_slots: Vec<usize>
@@ -25,8 +24,7 @@ impl LPTable {
     fn new(num_slots: usize, min_slot_size: usize) -> LPTable {
         LPTable {
             num_slots,
-            min_slot_size,
-            table: vec![Vec::with_capacity(min_slot_size); num_slots], 
+            table: vec![Vec::with_capacity(min_slot_size); num_slots],
             size: 0,
             occupied_slots: Vec::with_capacity(num_slots)
         }
@@ -48,7 +46,7 @@ impl LPTable {
     fn insert_or_update(&mut self, station: &[u8; 100], len: usize, hash: usize, temp: f32) {
         let slot = hash & (self.num_slots-1);
         debug!("station={}, hash={}, temp={}", str::from_utf8(&station[0..len]).unwrap(), hash, temp);
-       
+
         for ks in &mut self.table[slot] {
             // TODO: don't need to compare all the 100 bytes
             if &ks.station != station {
@@ -118,7 +116,12 @@ fn update_temp_vars(byte: u8, temp_int_part: &mut u8, temp_fraction_part: &mut u
     }
 }
 
-fn compute(contents: &str, thread_id: usize) -> LPTable {
+fn compute(contents: &str, thread_id: usize, min_bytes_to_process: usize) -> LPTable {
+    let mut ignore_first_line = true;
+    if thread_id == 0 {
+        ignore_first_line = false;
+    }
+    
     let start_time = Instant::now();
     let mut table = LPTable::new(130712, 4);
     let mut row_count=0;
@@ -133,15 +136,34 @@ fn compute(contents: &str, thread_id: usize) -> LPTable {
     let mut temp_fraction_part: u8 = 0;
     let mut temp_multiplier: f32 = 1.0;
     let mut parsing_int_part = true;
+    let mut bytes_read = 0;
 
-    for &byte in contents.as_bytes() {
+    let bytes = contents.bytes();
+    let mut iter = bytes.into_iter();
+    if ignore_first_line {
+        while let Some(b) = iter.next()  {
+            bytes_read += 1;
+            if b == b'\n' {
+                break;
+            }
+        }
+    }
+
+    for byte in iter {
+        bytes_read += 1;
+
         match byte {
             b'\n' => {
                 temp = f32::try_from(temp_int_part).unwrap() + f32::from(temp_fraction_part) / 10.0;
                 table.insert_or_update(&station, station_idx, hash, temp_multiplier * temp);
-                row_count+=1;    
+                row_count+=1;
                 reset_temp_vars(&mut temp_int_part, &mut temp_fraction_part, &mut temp_multiplier, &mut parsing_int_part);
                 reset_station_vars(&mut station, &mut station_idx, &mut hash, &mut parsing_name);
+
+                if bytes_read > min_bytes_to_process {
+                    break;
+                }
+
             },
             b';' => parsing_name = false,
             _ if parsing_name => update_station(&mut station, &mut station_idx, &mut hash, byte),
@@ -156,11 +178,9 @@ fn compute(contents: &str, thread_id: usize) -> LPTable {
     debug!("Distinct keys = {}", table.size);
     debug!("Collision Count = {}", table.get_collision_count());
     info!("Time taken to compute the stats: {} milliseconds", (end_time - start_time).as_millis());
-    
+
     table
 }
-
-
 
 fn read_file(filepath: &str, start_offset: usize, size: usize) -> String {
     let t1: Instant = Instant::now();
@@ -168,7 +188,7 @@ fn read_file(filepath: &str, start_offset: usize, size: usize) -> String {
     let mut file = File::open(filepath).unwrap();
     let curr_offset = file.seek(SeekFrom::Start(start_offset.try_into().unwrap())).unwrap();
 
-    // TODO: get ris of the assert
+    // TODO: get rid of the assert
     assert_eq!(curr_offset, start_offset.try_into().unwrap());
 
     let mut buf =  vec![0u8; size];
@@ -181,34 +201,31 @@ fn read_file(filepath: &str, start_offset: usize, size: usize) -> String {
     }
 }
 
-fn thread_run(thread_id: usize, filepath: &str, start_offset: usize, size: usize) -> LPTable {
-    let mut contents = read_file(filepath, start_offset, size);
-
-    let mut start_idx = 0;
-    if thread_id != 0 {
-        start_idx = contents.find('\n').unwrap() + 1;
+fn thread_run(thread_id: usize, filepath: &str, start_offset: usize, mut file_size_per_thread: usize) -> LPTable {
+    let file_size: usize = fs::metadata(filepath).unwrap().len().try_into().unwrap();
+    let mut bytes_to_read = file_size_per_thread;
+    bytes_to_read += MAX_LINE_SIZE;
+    let bytes_remaining = file_size - start_offset;
+    if bytes_remaining < bytes_to_read {
+        bytes_to_read = bytes_remaining;
     }
-
-    let end_idx = contents.rfind('\n').unwrap();
-    compute(&contents[start_idx..=end_idx], thread_id)
+    let contents = read_file(filepath, start_offset, bytes_to_read);
+    compute(&contents, thread_id, file_size_per_thread)
 }
 
-pub fn run() {
-    let path = "data/measurements.txt";
-    let mut handles = Vec::with_capacity(THREAD_COUNT);
-    let mut file_size: usize = fs::metadata(path).unwrap().len().try_into().unwrap();
-    let file_size_per_thread = file_size/THREAD_COUNT;
-    for thread_id in 0..THREAD_COUNT {
-        let mut size = file_size_per_thread + MAX_LINE_SIZE;
-        if thread_id == THREAD_COUNT -1 {
-            size = file_size;
-        }
+pub fn distribute_work(path: &'static str, thread_count: usize) -> Vec<JoinHandle<LPTable>> {
+    let mut handles = Vec::with_capacity(thread_count);
+    let file_size: usize = fs::metadata(path).unwrap().len().try_into().unwrap();
+    let file_size_per_thread = file_size.div_ceil(thread_count);
+    for thread_id in 0..thread_count {
         handles.push(thread::spawn(move || {
-            thread_run(thread_id, path, file_size_per_thread * thread_id, size)
+            thread_run(thread_id, path, file_size_per_thread * thread_id, file_size_per_thread)
         }));
-        file_size -= file_size_per_thread;
     }
+    handles
+}
 
+pub fn aggregate_result(handles: Vec<JoinHandle<LPTable>>) -> BTreeMap<String, KeyedStat> {
     let mut result: BTreeMap<String, KeyedStat> = BTreeMap::new();
     for handle in handles {
         let lptable = handle.join().unwrap();
@@ -234,6 +251,29 @@ pub fn run() {
             }
         }
     }
+    result
+}
 
-    print_result_btreemap(&result);
+pub fn run(path: &'static str) -> BTreeMap<String, KeyedStat> {
+    let handles = distribute_work(path, 3);
+    let result = aggregate_result(handles);
+    print_result_btreemap_kstat(&result);
+    result
+}
+
+#[test]
+fn test_impl() {
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "info")
+    }
+    env_logger::init();
+    let path = "data/test_small.csv";
+    let expected = attempt1::naive_btree_kstat(path);
+    let actual = run(path);
+    for (station, ks) in expected.into_iter() {
+        let acs = actual.get(&station).unwrap();
+        assert_eq!(ks.max, acs.max);
+        assert_eq!(ks.min, acs.min);
+        assert_eq!(ks.sum/ks.count, acs.sum/acs.count);
+    }
 }
