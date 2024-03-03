@@ -1,1 +1,9 @@
 /target
+data/measurements_10k.txt
+.idea/modules.xml
+.gitignore
+.idea/inspectionProfiles/Project_Default.xml
+.idea/vcs.xml
+.gitignore
+.idea/onebrc.iml
+data/measurements.txt

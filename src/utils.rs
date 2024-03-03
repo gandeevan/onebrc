@@ -3,10 +3,11 @@ use core::hash::Hash;
 use std::collections::BTreeMap;
 use std::{collections::HashMap, time::Instant};
 use std::hash::BuildHasherDefault;
-use gxhash;
+// use gxhash;
 
 use log::info;
 
+pub const SIMD_WIDTH: usize = 32;
 pub const LINE_COUNT: usize = 1_000_000_000;
 pub const THREAD_COUNT: usize = 16;
 pub const MAX_LINE_SIZE: usize = 107; //<100_BYTE_NAME><1_BYTE_SEMICOLON><6_BYTE_TEMPRATURE>, temprature is atmost 6 bytes since -99.9 >= temp <= 99.9   

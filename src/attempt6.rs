@@ -86,7 +86,6 @@ impl LPTable {
 
 }
 
-#[inline(always)]
 fn reset_temp_vars(temp_int_part: &mut u8, temp_fraction_part: &mut u8, temp_multiplier: &mut f32, parsing_int_part: &mut bool) {
     *temp_int_part = 0;
     *temp_fraction_part = 0;
@@ -94,7 +93,6 @@ fn reset_temp_vars(temp_int_part: &mut u8, temp_fraction_part: &mut u8, temp_mul
     *parsing_int_part = true;
 }
 
-#[inline(always)]
 fn reset_station_vars(station: &mut [u8; 100], station_idx: &mut usize, hash: &mut usize, parsing_name: &mut bool) {
     *station = [0; 100];
     *station_idx = 0;
@@ -102,7 +100,6 @@ fn reset_station_vars(station: &mut [u8; 100], station_idx: &mut usize, hash: &m
     *parsing_name = true;
 }
 
-#[inline(always)]
 fn update_station(station: &mut [u8; 100], station_idx: &mut usize, hash: &mut usize, byte: u8) {
     station[*station_idx] = byte;
     unsafe {
@@ -111,7 +108,6 @@ fn update_station(station: &mut [u8; 100], station_idx: &mut usize, hash: &mut u
     *station_idx += 1;
 }
 
-#[inline(always)]
 fn update_temp_vars(byte: u8, temp_int_part: &mut u8, temp_fraction_part: &mut u8, parsing_int_part: bool) {
     let digit = (byte - b'0');
     if parsing_int_part {
