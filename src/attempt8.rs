@@ -1,27 +1,18 @@
 use core::num;
-use std::{collections::BTreeMap, env, fs::{self, File}, io::{Read, Seek, SeekFrom}, ptr, thread::{self, current, JoinHandle}, time::Instant};
+use std::{collections::BTreeMap, env, fs::{self, File}, io::{Read, Seek, SeekFrom}, path::Iter, ptr, sync::{atomic::AtomicUsize, Arc}, thread::{self, current, JoinHandle}, time::Instant};
 
 use crate::{attempt1, utils::{print_result_btreemap_kstat, print_result_hashmap, KeyedStat, Stat, MAX_LINE_SIZE, THREAD_COUNT}};
 use log::{debug, info};
 use std::str;
 use memmap2::{Mmap, MmapOptions};
-
-// Attempt 5
-// Commentary about attempt 4:
-// 1. Even with a faster hash function, 30% (6s) of the total runtime can be attributed to hash table reads (get_mut).
-//    3 out of these 6s is goes towards the hash computation and the other 3 towards finding the approprtiate slot in the hash table.
-// 2. We are iterating over line twice in the compute method, once in the lines() method and another time during the hash computation
-//    float parsing.
-
+use std::sync::atomic::{AtomicU64};
 
 
 struct LPTable {
     num_slots: usize,
     table: Vec<Vec<KeyedStat>>,
     size: usize,
-    occupied_slots: Vec<usize>, 
-    insert_count: usize,
-    collision_count: usize, 
+    occupied_slots: Vec<usize>
 }
 
 
@@ -31,9 +22,7 @@ impl LPTable {
             num_slots,
             table: vec![Vec::with_capacity(min_slot_size); num_slots],
             size: 0,
-            occupied_slots: Vec::with_capacity(num_slots),
-            insert_count: 0,
-            collision_count: 0,
+            occupied_slots: Vec::with_capacity(num_slots)
         }
     }
 
@@ -56,7 +45,6 @@ impl LPTable {
 
     fn insert_or_update(&mut self, station: &[u8; 100], len: usize, hash: usize, temp: f32) {
         let slot = hash & (self.num_slots-1);
-        self.insert_count += 1;
         debug!("station={}, hash={}, temp={}", str::from_utf8(&station[0..len]).unwrap(), hash, temp);
 
         for ks in &mut self.table[slot] {
@@ -64,7 +52,6 @@ impl LPTable {
             if &ks.station != station {
                 assert_ne!(station[0..len], ks.station[0..ks.len]);
                 debug!("Collision for {} and {}", str::from_utf8(&station[0..len]).unwrap(), str::from_utf8(&ks.station[0..ks.len]).unwrap());
-                self.collision_count += 1;
                 continue;
             }
             // println!("Found multiple entries for {}", str::from_utf8(&station[0..len]).unwrap());
@@ -116,9 +103,10 @@ impl Cursor {
             temp_int_part: 0,
             temp_fraction_part: 0,
             temp_multiplier: 1.0,
-            parsing_int_part: true
+            parsing_int_part: true, 
         };
     }
+
 }
 
 fn temprature(c: &mut Cursor) -> f32 {
@@ -152,64 +140,119 @@ fn update_station(c: &mut Cursor, byte: u8) {
 }  
 
 
-fn compute(contents: &mut Mmap, thread_id: usize, min_bytes_to_process: usize) -> LPTable {
-    let ignore_first_line = thread_id != 0;
+fn compute(thread_id: usize, filepath: &str, offset_counter: Arc<AtomicUsize>, file_size: usize) -> LPTable {
+    let start_time: Instant = Instant::now();
+    let min_bytes_to_process = 4 * 1024 * 1024; // 2 MB
+    let file = File::open(filepath).unwrap();
 
-    let start_time = Instant::now();
-    let mut table = LPTable::new(130712, 4);
-    let mut bytes_read = 0;
-    let mut c = Cursor::new();
+    let mut table_1 = LPTable::new(130712, 2);
+    let mut table_2 = LPTable::new(130712, 2);
 
-    let mut iter = contents.into_iter();
-    if ignore_first_line {
-        while let Some(&byte) = iter.next() {
-            bytes_read += 1;
-            if byte == b'\n' {
-                break;
-            }
+
+    while true {
+        let start_offset = offset_counter.fetch_add(min_bytes_to_process, std::sync::atomic::Ordering::Relaxed);
+        if start_offset >= file_size {
+            break;
         }
-    }
-    
-    for &byte in iter {
-        bytes_read+=1;
+            
+        let mut c_1 = Cursor::new();
+        let mut c_2 = Cursor::new();
 
-        match byte {
-            b'\n' => {
-                let temprature = temprature(&mut c);
-                table.insert_or_update(&c.station, c.station_idx, c.hash, temprature);
-                reset(&mut c);
-                if bytes_read > min_bytes_to_process {
+        let buffer_1 =  unsafe { MmapOptions::new().offset(start_offset.try_into().unwrap()).map(&file).unwrap() };
+        let buffer_2 =  unsafe { MmapOptions::new().offset(start_offset.try_into().unwrap()).map(&file).unwrap() };
+
+        
+        let mut byte_count_1 = 0;
+        let mut byte_count_2 = 0;
+
+        let  byte_limit_1 =   min_bytes_to_process/2;
+        let  byte_limit_2 = min_bytes_to_process/2;
+
+
+        let mut iter_1 = buffer_1.into_iter();
+        let mut iter_2 = buffer_2.into_iter();
+
+        let ignore_first_line_1 = start_offset != 0;
+        let ignore_first_line_2 = true;
+
+        if ignore_first_line_1 {
+            while let Some(&byte) = iter_1.next() {
+                byte_count_1 += 1;
+                if byte == b'\n' {
                     break;
                 }
-            },
-            b';' => c.parsing_name = false,
-            _ if c.parsing_name => update_station(&mut c, byte),
-            b'-' => c.temp_multiplier = -1.0,
-            b'.' => c.parsing_int_part = false,
-            _ => update_temprature(&mut c, byte),
-        }     
+            }
+        }
+
+        if ignore_first_line_2 {
+            while let Some(&byte) = iter_2.next() {
+                byte_count_2 += 1;
+                if byte == b'\n' {
+                    break;
+                }
+            }
+        }
+        
+        for &byte in iter_1 {
+            byte_count_1+=1;
+
+            match byte {
+                b'\n' => {
+                    let temprature = temprature(&mut c_1);
+                    table_1.insert_or_update(&c_1.station, c_1.station_idx, c_1.hash, temprature);
+                    reset(&mut c_1);
+                    if byte_count_1 > byte_limit_1 {
+                        break;
+                    }
+                },
+                b';' => c_1.parsing_name = false,
+                _ if c_1.parsing_name => update_station(&mut c_1, byte),
+                b'-' => c_1.temp_multiplier = -1.0,
+                b'.' => c_1.parsing_int_part = false,
+                _ => update_temprature(&mut c_1, byte),
+            }     
+        }
+
+        for &byte in iter_2 {
+            byte_count_2+=1;
+
+            match byte {
+                b'\n' => {
+                    let temprature = temprature(&mut c_2);
+                    table_2.insert_or_update(&c_2.station, c_2.station_idx, c_2.hash, temprature);
+                    reset(&mut c_2);
+                    if byte_count_2 > byte_limit_2 {
+                        break;
+                    }
+                },
+                b';' => c_2.parsing_name = false,
+                _ if c_2.parsing_name => update_station(&mut c_2, byte),
+                b'-' => c_2.temp_multiplier = -1.0,
+                b'.' => c_2.parsing_int_part = false,
+                _ => update_temprature(&mut c_2, byte),
+            }     
+        }
     }
 
     let end_time = Instant::now();
-    info!("Insert count = {}, Collision count = {}", table.insert_count, table.collision_count);
     info!("Time taken to compute the stats: {} milliseconds", (end_time - start_time).as_millis());
-    table
+    table_1
 }
 
 
-fn thread_run(thread_id: usize, filepath: &str, start_offset: usize, file_size_per_thread: usize) -> LPTable {
+fn thread_run(thread_id: usize, filepath: &str, offset_counter: Arc<AtomicUsize>, file_size: usize) -> LPTable {
     let mut file = File::open(filepath).unwrap();
-    let mut mmap = unsafe { MmapOptions::new().offset(start_offset.try_into().unwrap()).map(&file).unwrap() };
-    compute(&mut mmap, thread_id, file_size_per_thread)
+    compute(thread_id, filepath, offset_counter, file_size)
 }
 
 pub fn distribute_work(path: &'static str, thread_count: usize) -> Vec<JoinHandle<LPTable>> {
+    let counter = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::with_capacity(thread_count);
     let file_size: usize = fs::metadata(path).unwrap().len().try_into().unwrap();
-    let file_size_per_thread = file_size.div_ceil(thread_count);
     for thread_id in 0..thread_count {
+        let counter_clone = counter.clone();
         handles.push(thread::spawn(move || {
-            thread_run(thread_id, path, file_size_per_thread * thread_id, file_size_per_thread)
+            thread_run(thread_id, path, counter_clone, file_size)
         }));
     }
     handles

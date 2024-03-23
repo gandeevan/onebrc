@@ -23,6 +23,19 @@ pub struct KeyedStat {
     pub len: usize
 }
 
+impl KeyedStat {
+    pub fn new() -> KeyedStat {
+        KeyedStat {
+            station: [0; 100], 
+            min: 0.0, 
+            max: 0.0,
+            sum: 0.0,
+            count: 0.0,
+            len: 0,
+        }
+    }
+}
+
 pub struct Stat {
     pub min: f32, 
     pub max: f32, 

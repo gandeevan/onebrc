@@ -12,6 +12,10 @@ mod attempt5;
 mod attempt6;
 
 mod attempt7;
+mod attempt8;
+mod attempt9;
+mod attempt10;
+
 
 use log::{debug, info};
 
@@ -23,7 +27,7 @@ fn main() {
     env_logger::init();
 
     let start_time = Instant::now();
-    attempt7::run("data/measurements.txt", THREAD_COUNT);
+    attempt10::run("data/measurements.txt", THREAD_COUNT);
     let end_time = Instant::now();
     info!("Runtime: {} milliseconds", (end_time-start_time).as_millis());
 }
